@@ -1,11 +1,6 @@
 #!/usr/bin/env python 
 
 """
-ShinyLaser
-
-"""
-
-"""
 think|haus gcode inkscape extension
 -----------------------------------
 Maintained by Peter Rogers (peter.rogers@gmail.com)
@@ -36,6 +31,12 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 """
 
 """
+Changelog 24/02/2014 
+* modifications to make work with inkscape v91
+* line 89 inkex._ not working, ammended
+* line 833 float attribute error regarding mm extension. Set to truncate last 2 chars, crude but works for me
+* line 864 scale factor no longer needed for mm. Is this just because my doc properties are mm?
+
 Changelog 2012-01-12 - PAR:
 * fixed bug in compile_paths when dealing with empty node data
 
@@ -88,8 +89,10 @@ import re
 import copy
 import sys
 import time
-_ = inkex._
-
+#_ = inkex._
+# IanH altered _ for inkscape 0.91
+import gettext
+_ = gettext.gettext
 
 ################################################################################
 ###
@@ -97,7 +100,7 @@ _ = inkex._
 ###
 ################################################################################
 
-VERSION = "1.0.1"
+VERSION = "1.30"
 
 STRAIGHT_TOLERANCE = 0.0001
 STRAIGHT_DISTANCE_TOLERANCE = 0.0001
@@ -105,8 +108,12 @@ LASER_ON = "M3"          # Peter - LASER ON MCODE
 LASER_OFF = "M5\n"        # Peter - LASER OFF MCODE
 TOOL_CHANGE = "T%02d (select tool)\nM6 (tool change)\n\n"
 
-HEADER_TEXT = ""
-FOOTER_TEXT = ""
+HEADER_TEXT = "G90 ; absolute programing\n"
+FOOTER_TEXT = """
+G0 X0.000 Y0.000
+M05
+M02
+"""
 
 BIARC_STYLE = {
         'biarc0':    simplestyle.formatStyle({ 'stroke': '#88f', 'fill': 'none', 'stroke-width':'1' }),
@@ -435,9 +442,9 @@ class Gcode_tools(inkex.Effect):
         # added move (laser off) feedrate and laser intensity; made all int rather than float - (ajf)
         self.OptionParser.add_option("-p", "--feed",                    action="store", type="int",         dest="feed", default="60",                        help="Cut Feed rate in unit/min")
         self.OptionParser.add_option("-m", "--Mfeed",                    action="store", type="int",         dest="Mfeed", default="300",                        help="Move Feed rate in unit/min")
-        self.OptionParser.add_option("-l", "--laser",                    action="store", type="float",         dest="laser", default="0.5",                        help="Laser intensity (0.0-1.0)")
-        self.OptionParser.add_option("-b",   "--homebefore",                 action="store", type="inkbool",    dest="homebefore", default=True, help="Home all beofre starting (G28)")
-        self.OptionParser.add_option("-a",   "--homeafter",                 action="store", type="inkbool",    dest="homeafter", default=False, help="Home X Y at end of job")
+        self.OptionParser.add_option("-l", "--laser",                    action="store", type="int",         dest="laser", default="10",                        help="Laser intensity (0-100)")
+        self.OptionParser.add_option("-b",   "--homebefore",                 action="store", type="inkbool",    dest="homebefore", default=True, help="Home all axis beofre starting (G28)")
+        self.OptionParser.add_option("-a",   "--homeafter",                 action="store", type="inkbool",    dest="homeafter", default=False, help="Home all axis at end of job (G28)")
 
 
         self.OptionParser.add_option("",   "--biarc-tolerance",            action="store", type="float",         dest="biarc_tolerance", default="1",        help="Tolerance used when calculating biarc interpolation.")                
@@ -455,7 +462,7 @@ class Gcode_tools(inkex.Effect):
         self.OptionParser.add_option("",   "--loft-direction",            action="store", type="string",         dest="loft_direction", default="crosswise",        help="Direction of loft's interpolation.")
         self.OptionParser.add_option("",   "--loft-interpolation-degree",action="store", type="float",        dest="loft_interpolation_degree", default="2",    help="Which interpolation use to loft the paths smooth interpolation or staright.")
 
-        self.OptionParser.add_option("",   "--min-arc-radius",            action="store", type="float",         dest="min_arc_radius", default="500.0",            help="All arc having radius less than minimum will be considered as straight line")        
+        self.OptionParser.add_option("",   "--min-arc-radius",            action="store", type="float",         dest="min_arc_radius", default=".1",            help="All arc having radius less than minimum will be considered as straight line")        
 
     def parse_curve(self, path):
 #        if self.options.Xscale!=self.options.Yscale:
@@ -627,14 +634,14 @@ class Gcode_tools(inkex.Effect):
             elif s[1] == 'line':
                 if lg=="G00": 
                     #gcode += "G01 " + self.make_args([None,None,s[5][0]+depth]) + feed +"\n" + LASER_ON
-                    gcode += LASER_ON + "\n"
-                gcode += "G01 " + "S%.2f " % self.options.laser + self.make_args(si[0]) + " F%i" % self.options.feed + "\n"
+                    gcode += LASER_ON + " S%i" % self.options.laser + "\n"
+                gcode += "G01 " +self.make_args(si[0]) + " F%i" % self.options.feed + "\n"
                 lg = 'G01'
 
             elif s[1] == 'arc':
                 if lg=="G00":
                     #gcode += "G01 " + self.make_args([None,None,s[5][0]+depth]) + feed +"\n" + LASER_ON
-                    gcode += LASER_ON + "\n"
+                    gcode += LASER_ON + " S%i" % self.options.laser + "\n"
 
                 dx = s[2][0]-s[0][0]
                 dy = s[2][1]-s[0][1]
@@ -646,7 +653,7 @@ class Gcode_tools(inkex.Effect):
                             gcode += cwArc
                         else:
                             gcode += ccwArc
-                        gcode += " " + "S%.2f " % self.options.laser + self.make_args(si[0] + [None, dx, dy, None]) + " F%i" % self.options.feed + "\n"
+                        gcode += " " + self.make_args(si[0] + [None, dx, dy, None]) + " F%i" % self.options.feed + "\n"
 
                     else:
                         r = (r1.mag()+r2.mag())/2
@@ -654,21 +661,21 @@ class Gcode_tools(inkex.Effect):
                             gcode += cwArc
                         else:
                             gcode += ccwArc
-                        gcode += " " + "S%.2f " % self.options.laser + self.make_args(si[0]) + " R%f" % (r*self.options.Xscale) + " F%i" % self.options.feed  + "\n"
+                        gcode += " " + self.make_args(si[0]) + " R%f" % (r*self.options.Xscale) + " F%i" % self.options.feed  + "\n"
 
                     lg = cwArc
                 else:
                     if lg=="G00": 
                         #gcode += "G01 " + self.make_args([None,None,s[5][0]+depth]) + feed +"\n" + LASER_ON
-                        gcode += LASER_ON + "\n"
-                    gcode += "G01 " + "S%.2f " % self.options.laser + self.make_args(si[0]) + " F%i" % self.options.feed + "\n"
+                        gcode += LASER_ON + " S%i" % self.options.laser + "\n"
+                    gcode += "G01 " +self.make_args(si[0]) + " F%i" % self.options.feed + "\n"
                     lg = 'G01'
 
     
         if si[1] == 'end':
             gcode += LASER_OFF
             if self.options.homeafter:
-                gcode += "\n\nG00 X0 Y0 F4000 ; home"
+                gcode += "\n\nG28 ; home all"
 
         return gcode
 
@@ -824,7 +831,12 @@ class Gcode_tools(inkex.Effect):
         selected = self.selected.values()
 
         root = self.document.getroot()
-        self.pageHeight = float(root.get("height", None))
+        #self.pageHeight = float(root.get("height", None))
+        # IanH new inkscape version screws up when units set to mm
+        # 200mm no good -2 chars from the end -> 200 
+        heightmm = root.get("height", None)
+        heightmm = heightmm[:-2]
+        self.pageHeight = float(heightmm)
         self.flipArcs = (self.options.Xscale*self.options.Yscale < 0)
         self.currentTool = 0
 
@@ -850,7 +862,9 @@ class Gcode_tools(inkex.Effect):
         gcode = self.header;
 
         if (self.options.unit == "mm"):
-            self.unitScale = 0.282222
+            # IanH not sure why this isn't needed any more
+            #self.unitScale = 0.282222
+            self.unitScale = 1
             gcode += "G21 ; All units in mm\n"
         elif (self.options.unit == "in"):
             self.unitScale = 0.011111
