@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <inkscape-extension>
-    <name>ShinyLaser Gcode</name>
+    <name>ShinyLaser Gcode for BoXZY</name>
     <id>com.istartup.shinylaser</id>
 
     <effect>
@@ -19,9 +19,14 @@
 
     <param name='tab' type="notebook">
         <page name='tab' _gui-text='Help'>
-            <_param name="fullhelp" type="description">ShinyLaser exports inkscape paths to Gcode compatible with Smoothieware laser module. 
+            <_param name="fullhelp" type="description">This fork of ShinyLaser exports inkscape paths to Gcode compatible with the BoXZY laser module.
+            
+To use the plugin:
+  * Convert objects to paths before export
+  * Select objects to export before running the plugin
+  * Configure the document to use pixel units
 
-This extenstion is a fork of THLaser v1.30, by Peter Rogers at think|haus, which is itself a fork of Gcodetools v1.2 by Nick Drobchenko.</_param>
+This extension is a fork of ShinyLaser 1.30 by Ian Hydes, which is a fork of THLaser v1.30, by Peter Rogers at think|haus, which is itself a fork of Gcodetools v1.2 by Nick Drobchenko.</_param>
         </page>
 
         <page name='tab' _gui-text='Advanced'>
@@ -35,14 +40,14 @@ This extenstion is a fork of THLaser v1.30, by Peter Rogers at think|haus, which
         </page>
         
         <page name='tab' _gui-text='Preferences'>
-            <param name="filename" type="string" _gui-text="File name: ">output.g</param>
+            <param name="filename" type="string" _gui-text="File name: ">laser.gcode</param>
             <param name="directory" type="string" _gui-text="Directory: "></param>
             <_param name="help" type="description">(blank is your desktop)</_param>
-            <param name="feed" type="int" min="0" max="1000" _gui-text="Cut Feedrate:">60</param>
-            <param name="Mfeed" type="int" min="0" max="5000" _gui-text="Traversal Feedrate:">300</param>
-            <param name="laser" type="float" precision="2" min="0" max="1" _gui-text="Laser Intensity (0.0-1):">0.1</param>
-            <param name="homebefore" type="boolean" _gui-text="HOMEALL (G28) Before:">true</param>
-            <param name="homeafter" type="boolean" _gui-text="Home X & Y After:">false</param>
+            <param name="feed" type="int" min="0" max="6000" _gui-text="Cut Feedrate:">600</param>
+            <param name="Mfeed" type="int" min="0" max="6000" _gui-text="Traversal Feedrate:">1200</param>
+            <param name="laser" type="int" min="0" max="100" _gui-text="Laser Intensity (0-100):">50</param>
+            <param name="homebefore" type="boolean" _gui-text="HOMEALL (G28) Before:">false</param>
+            <param name="homeafter" type="boolean" _gui-text="Zero X and Y After:">true</param>
 
             <param name="Xscale" type="float" precision="4" min="-1000" max="1000" _gui-text="Scale along X axis:">1</param>
             <param name="Yscale" type="float" precision="4" min="-1000" max="1000" _gui-text="Scale along Y axis:">1</param>

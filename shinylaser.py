@@ -31,6 +31,9 @@ Foundation, Inc., 59 Temple Place, Suite 330, Boston, MA  02111-1307  USA
 """
 
 """
+Changelog 06/03/2014 - WH
+* modified to work with BoXZY's Laser
+
 Changelog 24/02/2014 
 * modifications to make work with inkscape v91
 * line 89 inkex._ not working, ammended
@@ -100,19 +103,17 @@ _ = gettext.gettext
 ###
 ################################################################################
 
-VERSION = "1.30"
+VERSION = "1.40"
 
 STRAIGHT_TOLERANCE = 0.0001
 STRAIGHT_DISTANCE_TOLERANCE = 0.0001
-LASER_ON = "M3"          # Peter - LASER ON MCODE
-LASER_OFF = "M5\n"        # Peter - LASER OFF MCODE
+LASER_POWER = " L%d"
 TOOL_CHANGE = "T%02d (select tool)\nM6 (tool change)\n\n"
 
-HEADER_TEXT = "G90 ; absolute programing\n"
+#HEADER_TEXT = "G90 ; absolute programing\n"
+HEADER_TEXT = "G92 X0 Y0 Z0\n"
 FOOTER_TEXT = """
-G0 X0.000 Y0.000
-M05
-M02
+M84 ; Stop Idle Hold
 """
 
 BIARC_STYLE = {
@@ -128,7 +129,7 @@ SVG_PATH_TAG = inkex.addNS('path','svg')
 SVG_LABEL_TAG = inkex.addNS("label", "inkscape")
 
 
-GCODE_EXTENSION = ".g" # changed to be Marlin friendly (ajf)
+GCODE_EXTENSION = ".gcode" # changed to be Marlin friendly (ajf)
 
 options = {}
 
@@ -196,8 +197,8 @@ class P:
         s = math.sin(theta)
         return P(self.x * c - self.y * s,  self.x * s + self.y * c)
     def angle(self): return math.atan2(self.y, self.x)
-    def __repr__(self): return '%f,%f' % (self.x, self.y)
-    def pr(self): return "%.2f,%.2f" % (self.x, self.y)
+    def __repr__(self): return '%.4f,%.4f' % (self.x, self.y)
+    def pr(self): return "%.4f,%.4f" % (self.x, self.y)
     def to_list(self): return [self.x, self.y]    
 
 
@@ -440,11 +441,11 @@ class Gcode_tools(inkex.Effect):
         self.OptionParser.add_option("-x", "--Xoffset",                    action="store", type="float",         dest="Xoffset", default="0.0",                    help="Offset along X")    
         self.OptionParser.add_option("-y", "--Yoffset",                    action="store", type="float",         dest="Yoffset", default="0.0",                    help="Offset along Y")
         # added move (laser off) feedrate and laser intensity; made all int rather than float - (ajf)
-        self.OptionParser.add_option("-p", "--feed",                    action="store", type="int",         dest="feed", default="60",                        help="Cut Feed rate in unit/min")
-        self.OptionParser.add_option("-m", "--Mfeed",                    action="store", type="int",         dest="Mfeed", default="300",                        help="Move Feed rate in unit/min")
-        self.OptionParser.add_option("-l", "--laser",                    action="store", type="int",         dest="laser", default="10",                        help="Laser intensity (0-100)")
+        self.OptionParser.add_option("-p", "--feed",                    action="store", type="int",         dest="feed", default="500",                        help="Cut Feed rate in unit/min")
+        self.OptionParser.add_option("-m", "--Mfeed",                    action="store", type="int",         dest="Mfeed", default="1200",                        help="Move Feed rate in unit/min")
+        self.OptionParser.add_option("-l", "--laser",                    action="store", type="int",         dest="laser", default="50",                        help="Laser intensity (0-100)")
         self.OptionParser.add_option("-b",   "--homebefore",                 action="store", type="inkbool",    dest="homebefore", default=True, help="Home all axis beofre starting (G28)")
-        self.OptionParser.add_option("-a",   "--homeafter",                 action="store", type="inkbool",    dest="homeafter", default=False, help="Home all axis at end of job (G28)")
+        self.OptionParser.add_option("-a",   "--homeafter",                 action="store", type="inkbool",    dest="homeafter", default=False, help="Home x and y axis at end of job")
 
 
         self.OptionParser.add_option("",   "--biarc-tolerance",            action="store", type="float",         dest="biarc_tolerance", default="1",        help="Tolerance used when calculating biarc interpolation.")                
@@ -592,7 +593,7 @@ class Gcode_tools(inkex.Effect):
         for i in range(6):
             if c[i]!=None:
                 value = self.unitScale*(c[i]*m[i]+a[i])
-                args.append(s[i] + ("%f" % value) + s1[i])
+                args.append(s[i] + ("%.4f" % value) + s1[i])
         return " ".join(args)
     
     def generate_gcode(self, curve, depth, altfeed=None):
@@ -612,37 +613,21 @@ class Gcode_tools(inkex.Effect):
             # The geometry is reflected, so invert the orientation of the arcs to match
             (cwArc, ccwArc) = (ccwArc, cwArc)
 
-        # Peter's note: Here's where the 'laser on' and 'laser off' m-codes get appended to the GCODE generation
-        lg = 'G00'
+        lpower = LASER_POWER % self.options.laser
         for i in range(1,len(curve)):
             s, si = curve[i-1], curve[i]
-            #feed = f if lg not in ['G01','G02','G03'] else ''
-
-            if (lg not in ["G01", "G02", "G03"]):
-                feed = f
-            else:
-                feed = ""
 
             if s[1] == 'move':
                 # Traversals (G00) tend to signal either the toolhead coming up, going down, or indexing to a new workplace.  All other cases seem to signal cutting.
-                gcode += LASER_OFF + "\nG00" + " " + self.make_args(si[0]) + " F%i" % self.options.Mfeed + "\n"
-                lg = 'G00'
+                gcode += "\nG00" + " " + self.make_args(si[0]) + " F%i" % self.options.Mfeed + "\n"
 
             elif s[1] == 'end':
-                lg = 'G00'
+                gcode += "\n"
 
             elif s[1] == 'line':
-                if lg=="G00": 
-                    #gcode += "G01 " + self.make_args([None,None,s[5][0]+depth]) + feed +"\n" + LASER_ON
-                    gcode += LASER_ON + " S%i" % self.options.laser + "\n"
-                gcode += "G01 " +self.make_args(si[0]) + " F%i" % self.options.feed + "\n"
-                lg = 'G01'
+                gcode += "G01 " +self.make_args(si[0]) + " F%i" % self.options.feed + lpower + "\n"
 
             elif s[1] == 'arc':
-                if lg=="G00":
-                    #gcode += "G01 " + self.make_args([None,None,s[5][0]+depth]) + feed +"\n" + LASER_ON
-                    gcode += LASER_ON + " S%i" % self.options.laser + "\n"
-
                 dx = s[2][0]-s[0][0]
                 dy = s[2][1]-s[0][1]
                 if abs((dx**2 + dy**2)*self.options.Xscale) > self.options.min_arc_radius:
@@ -653,7 +638,7 @@ class Gcode_tools(inkex.Effect):
                             gcode += cwArc
                         else:
                             gcode += ccwArc
-                        gcode += " " + self.make_args(si[0] + [None, dx, dy, None]) + " F%i" % self.options.feed + "\n"
+                        gcode += " " + self.make_args(si[0] + [None, dx, dy, None]) + " F%i" % self.options.feed + lpower + "\n"
 
                     else:
                         r = (r1.mag()+r2.mag())/2
@@ -661,21 +646,15 @@ class Gcode_tools(inkex.Effect):
                             gcode += cwArc
                         else:
                             gcode += ccwArc
-                        gcode += " " + self.make_args(si[0]) + " R%f" % (r*self.options.Xscale) + " F%i" % self.options.feed  + "\n"
+                        gcode += " " + self.make_args(si[0]) + " R%.4f" % (r*self.options.Xscale) + " F%i" % self.options.feed  + "\n"
 
-                    lg = cwArc
                 else:
-                    if lg=="G00": 
-                        #gcode += "G01 " + self.make_args([None,None,s[5][0]+depth]) + feed +"\n" + LASER_ON
-                        gcode += LASER_ON + " S%i" % self.options.laser + "\n"
-                    gcode += "G01 " +self.make_args(si[0]) + " F%i" % self.options.feed + "\n"
-                    lg = 'G01'
+                    gcode += "G01 " +self.make_args(si[0]) + " F%i" % self.options.feed + lpower + "\n"
 
     
         if si[1] == 'end':
-            gcode += LASER_OFF
             if self.options.homeafter:
-                gcode += "\n\nG28 ; home all"
+                gcode += "\n\nG0 X0 Y0 F%i ; home X and Y" % self.options.Mfeed
 
         return gcode
 
@@ -784,7 +763,7 @@ class Gcode_tools(inkex.Effect):
 
             # If there are several layers, start with a tool change operation
             if (len(layers) > 1):
-                gcode += LASER_OFF+"\n"
+                gcode += "\n"
                 size = 60
                 gcode += "(%s)\n" % ("*"*size)
                 gcode += ("(***** LAYER: %%-%ds *****)\n" % (size-19)) % (layerName)
@@ -854,7 +833,7 @@ class Gcode_tools(inkex.Effect):
         logger.write("output file == %s" % self.options.file)
 
         if len(selected)<=0:
-            inkex.errormsg(_("This extension requires at least one selected path."))
+            inkex.errormsg(_("Select paths to use before export.  This extension requires at least one selected path."))
             return
 
         self.check_dir()
@@ -862,9 +841,7 @@ class Gcode_tools(inkex.Effect):
         gcode = self.header;
 
         if (self.options.unit == "mm"):
-            # IanH not sure why this isn't needed any more
-            #self.unitScale = 0.282222
-            self.unitScale = 1
+            self.unitScale = 0.282222
             gcode += "G21 ; All units in mm\n"
         elif (self.options.unit == "in"):
             self.unitScale = 0.011111
@@ -907,7 +884,7 @@ class Gcode_tools(inkex.Effect):
             return
 
         if (self.skipped > 0):
-            inkex.errormsg(_("Warning: skipped %d object(s) because they were not paths" % self.skipped))
+            inkex.errormsg(_("Warning: skipped %d non-path object(s). Objects must be converted to paths before export (Path->Object to Path)." % self.skipped))
 
 e = Gcode_tools()
 e.affect()
