@@ -809,13 +809,6 @@ class Gcode_tools(inkex.Effect):
         options = self.options
         selected = self.selected.values()
 
-        root = self.document.getroot()
-        #self.pageHeight = float(root.get("height", None))
-        # IanH new inkscape version screws up when units set to mm
-        # 200mm no good -2 chars from the end -> 200 
-        heightmm = root.get("height", None)
-        heightmm = heightmm[:-2]
-        self.pageHeight = float(heightmm)
         self.flipArcs = (self.options.Xscale*self.options.Yscale < 0)
         self.currentTool = 0
 
@@ -840,15 +833,28 @@ class Gcode_tools(inkex.Effect):
 
         gcode = self.header;
 
+        root = self.document.getroot()
+        if root.get('viewBox'):
+            [viewx, viewy, vieww, viewh] = root.get('viewBox').split(' ')
+            self.unitScale = self.unittouu(root.get('width'))/float(vieww)
+            if self.unittouu(root.get('height'))/float(viewh) < self.unitScale:
+                self.unitScale = self.unittouu(root.get('height'))/float(viewh)
+            self.vbHeight = float(viewh)
+        else:
+            self.unitScale = 1.0
+            self.vbHeight = self.unittouu(root.get('height', None))
+
         if (self.options.unit == "mm"):
-            self.unitScale = 0.282222
+            self.unitScale /= self.unittouu('1mm')
             gcode += "G21 ; All units in mm\n"
         elif (self.options.unit == "in"):
-            self.unitScale = 0.011111
+            self.unitScale /= self.unittouu('1in')
             gcode += "G20 ; All units in in\n"
         else:
             inkex.errormsg(_("You must choose mm or in"))
             return
+
+        self.pageHeight = self.vbHeight;
 
         if not self.options.generate_not_parametric_code:
             gcode += """
