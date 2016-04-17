@@ -444,6 +444,7 @@ class Gcode_tools(inkex.Effect):
         self.OptionParser.add_option("-p", "--feed",                    action="store", type="int",         dest="feed", default="500",                        help="Cut Feed rate in unit/min")
         self.OptionParser.add_option("-m", "--Mfeed",                    action="store", type="int",         dest="Mfeed", default="1200",                        help="Move Feed rate in unit/min")
         self.OptionParser.add_option("-l", "--laser",                    action="store", type="int",         dest="laser", default="50",                        help="Laser intensity (0-100)")
+        self.OptionParser.add_option("-c", "--passCount",                action="store", type="int",         dest="passCount", default="1",                     help="Number of Passes (1-5)")
         self.OptionParser.add_option("-b",   "--homebefore",                 action="store", type="inkbool",    dest="homebefore", default=True, help="Home all axis beofre starting (G28)")
         self.OptionParser.add_option("-a",   "--homeafter",                 action="store", type="inkbool",    dest="homeafter", default=False, help="Home x and y axis at end of job")
 
@@ -628,45 +629,50 @@ class Gcode_tools(inkex.Effect):
             (cwArc, ccwArc) = (ccwArc, cwArc)
 
         lpower = LASER_POWER % self.options.laser
-        for i in range(1,len(curve)):
-            s, si = curve[i-1], curve[i]
+        isLast = False
+        for pc in range(0,self.options.passCount):
+            gcode += "\n; Pass %i:\n" % (pc+1)
+            for i in range(1,len(curve)):
+                s, si = curve[i-1], curve[i]
 
-            if s[1] == 'move':
-                # Traversals (G00) tend to signal either the toolhead coming up, going down, or indexing to a new workplace.  All other cases seem to signal cutting.
-                gcode += "\nG00" + " " + self.make_args(si[0]) + " F%i" % self.options.Mfeed + "\n"
+                if s[1] == 'move':
+                    # Traversals (G00) tend to signal either the toolhead coming up, going down, or indexing to a new workplace.  All other cases seem to signal cutting.
+                    gcode += "G00" + " " + self.make_args(si[0]) + " F%i" % self.options.Mfeed + "\n"
 
-            elif s[1] == 'end':
-                gcode += "\n"
+                elif s[1] == 'end':
+                    gcode += "\n"
 
-            elif s[1] == 'line':
-                gcode += "G01 " +self.make_args(si[0]) + " F%i" % self.options.feed + lpower + "\n"
-
-            elif s[1] == 'arc':
-                dx = s[2][0]-s[0][0]
-                dy = s[2][1]-s[0][1]
-                if abs((dx**2 + dy**2)*self.options.Xscale) > self.options.min_arc_radius:
-                    r1 = P(s[0])-P(s[2])
-                    r2 = P(si[0])-P(s[2])
-                    if abs(r1.mag() - r2.mag()) < 0.001:
-                        if (s[3] > 0):
-                            gcode += cwArc
-                        else:
-                            gcode += ccwArc
-                        gcode += " " + self.make_args(si[0] + [None, dx, dy, None]) + " F%i" % self.options.feed + lpower + "\n"
-
-                    else:
-                        r = (r1.mag()+r2.mag())/2
-                        if (s[3] > 0):
-                            gcode += cwArc
-                        else:
-                            gcode += ccwArc
-                        gcode += " " + self.make_args(si[0]) + " R%.4f" % (r*self.options.Xscale) + " F%i" % self.options.feed  + "\n"
-
-                else:
+                elif s[1] == 'line':
                     gcode += "G01 " +self.make_args(si[0]) + " F%i" % self.options.feed + lpower + "\n"
 
-    
-        if si[1] == 'end':
+                elif s[1] == 'arc':
+                    dx = s[2][0]-s[0][0]
+                    dy = s[2][1]-s[0][1]
+                    if abs((dx**2 + dy**2)*self.options.Xscale) > self.options.min_arc_radius:
+                        r1 = P(s[0])-P(s[2])
+                        r2 = P(si[0])-P(s[2])
+                        if abs(r1.mag() - r2.mag()) < 0.001:
+                            if (s[3] > 0):
+                                gcode += cwArc
+                            else:
+                                gcode += ccwArc
+                            gcode += " " + self.make_args(si[0] + [None, dx, dy, None]) + " F%i" % self.options.feed + lpower + "\n"
+
+                        else:
+                            r = (r1.mag()+r2.mag())/2
+                            if (s[3] > 0):
+                                gcode += cwArc
+                            else:
+                                gcode += ccwArc
+                            gcode += " " + self.make_args(si[0]) + " R%.4f" % (r*self.options.Xscale) + " F%i" % self.options.feed  + "\n"
+
+                    else:
+                        gcode += "G01 " +self.make_args(si[0]) + " F%i" % self.options.feed + lpower + "\n"
+
+            if si[1] == 'end':
+                isLast = True
+
+        if isLast:
             if self.options.homeafter:
                 gcode += "\n\nG0 X0 Y0 F%i ; home X and Y" % self.options.Mfeed
 
@@ -874,7 +880,8 @@ class Gcode_tools(inkex.Effect):
             gcode += """
 ; Cut Feedrate %i
 ; Move Feedrate %i
-; Laser Intensity %i \n""" % (self.options.feed, self.options.Mfeed, self.options.laser)
+; Laser Intensity %i
+; Pass Count %i \n""" % (self.options.feed, self.options.Mfeed, self.options.laser, self.options.passCount)
 
         if self.options.homebefore:
             gcode += "G28 ; home all\n\n"
