@@ -503,6 +503,20 @@ class Gcode_tools(inkex.Effect):
         return lst
 
     def draw_curve(self, curve, group=None, style=BIARC_STYLE):
+        root = self.document.getroot()
+        if root.get('viewBox'):
+            [viewx, viewy, vieww, viewh] = root.get('viewBox').split(' ')
+            # This seems to work for all page sizes and unit types tested (Inkscape 0.91+),
+            # but for the life of me, I can't figure out where the 200 offset
+            # between the viewBox and page layout is coming from.  Failure to
+            # account for this causes the generated cut-path to be skewed on some page sizes.
+            # I'm certain there should be an attribute somewhere on the document
+            # that this should be derived from rather than hardcoding it, but
+            # I can't find where (DEW, 16 Apr 2016)
+            vbHeight = float(viewh)-200
+        else:
+            vbHeight = 0.0
+
         if group==None:
             group = inkex.etree.SubElement( self.biarcGroup, SVG_GROUP_TAG )
         s, arcn = '', 0
@@ -512,7 +526,7 @@ class Gcode_tools(inkex.Effect):
                     inkex.etree.SubElement(    group, SVG_PATH_TAG, 
                             {
                                 'style': style['line'],
-                                'd':'M %s,%s L %s,%s' % (s[0][0], s[0][1], si[0][0], si[0][1]),
+                                'd':'M %s,%s L %s,%s' % (s[0][0], s[0][1]-vbHeight, si[0][0], si[0][1]-vbHeight),
                                 'comment': str(s)
                             }
                         )
@@ -535,7 +549,7 @@ class Gcode_tools(inkex.Effect):
                          {
                             'style': style['biarc%s' % (arcn%2)],
                              inkex.addNS('cx','sodipodi'):        str(c[0]),
-                             inkex.addNS('cy','sodipodi'):        str(c[1]),
+                             inkex.addNS('cy','sodipodi'):        str(c[1]-vbHeight),
                              inkex.addNS('rx','sodipodi'):        str(r),
                              inkex.addNS('ry','sodipodi'):        str(r),
                              inkex.addNS('start','sodipodi'):    str(a_st),
