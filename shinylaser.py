@@ -108,6 +108,8 @@ VERSION = "1.40"
 STRAIGHT_TOLERANCE = 0.0001
 STRAIGHT_DISTANCE_TOLERANCE = 0.0001
 LASER_POWER = " L%d"
+LASER_IDLE_POWER = 5.0    # This is the Idle "Off" power level for the laser (usually low-level visible mode so laser doesn't fully shutdown)
+LASER_OFF_POWER = 0.0     # This is the true "off" power level for the laser
 TOOL_CHANGE = "T%02d (select tool)\nM6 (tool change)\n\n"
 
 #HEADER_TEXT = "G90 ; absolute programing\n"
@@ -444,6 +446,7 @@ class Gcode_tools(inkex.Effect):
         self.OptionParser.add_option("-p", "--feed",                    action="store", type="int",         dest="feed", default="500",                        help="Cut Feed rate in unit/min")
         self.OptionParser.add_option("-m", "--Mfeed",                    action="store", type="int",         dest="Mfeed", default="1200",                        help="Move Feed rate in unit/min")
         self.OptionParser.add_option("-l", "--laser",                    action="store", type="int",         dest="laser", default="50",                        help="Laser intensity (0-100)")
+        self.OptionParser.add_option("-c", "--passCount",                action="store", type="int",         dest="passCount", default="1",                     help="Number of Passes (1-5)")
         self.OptionParser.add_option("-b",   "--homebefore",                 action="store", type="inkbool",    dest="homebefore", default=True, help="Home all axis beofre starting (G28)")
         self.OptionParser.add_option("-a",   "--homeafter",                 action="store", type="inkbool",    dest="homeafter", default=False, help="Home x and y axis at end of job")
 
@@ -503,6 +506,20 @@ class Gcode_tools(inkex.Effect):
         return lst
 
     def draw_curve(self, curve, group=None, style=BIARC_STYLE):
+        root = self.document.getroot()
+        if root.get('viewBox'):
+            [viewx, viewy, vieww, viewh] = root.get('viewBox').split(' ')
+            # This seems to work for all page sizes and unit types tested (Inkscape 0.91+),
+            # but for the life of me, I can't figure out where the 200 offset
+            # between the viewBox and page layout is coming from.  Failure to
+            # account for this causes the generated cut-path to be skewed on some page sizes.
+            # I'm certain there should be an attribute somewhere on the document
+            # that this should be derived from rather than hardcoding it, but
+            # I can't find where (DEW, 16 Apr 2016)
+            vbHeight = float(viewh)-200
+        else:
+            vbHeight = 0.0
+
         if group==None:
             group = inkex.etree.SubElement( self.biarcGroup, SVG_GROUP_TAG )
         s, arcn = '', 0
@@ -512,7 +529,7 @@ class Gcode_tools(inkex.Effect):
                     inkex.etree.SubElement(    group, SVG_PATH_TAG, 
                             {
                                 'style': style['line'],
-                                'd':'M %s,%s L %s,%s' % (s[0][0], s[0][1], si[0][0], si[0][1]),
+                                'd':'M %s,%s L %s,%s' % (s[0][0], s[0][1]-vbHeight, si[0][0], si[0][1]-vbHeight),
                                 'comment': str(s)
                             }
                         )
@@ -535,7 +552,7 @@ class Gcode_tools(inkex.Effect):
                          {
                             'style': style['biarc%s' % (arcn%2)],
                              inkex.addNS('cx','sodipodi'):        str(c[0]),
-                             inkex.addNS('cy','sodipodi'):        str(c[1]),
+                             inkex.addNS('cy','sodipodi'):        str(c[1]-vbHeight),
                              inkex.addNS('rx','sodipodi'):        str(r),
                              inkex.addNS('ry','sodipodi'):        str(r),
                              inkex.addNS('start','sodipodi'):    str(a_st),
@@ -614,45 +631,96 @@ class Gcode_tools(inkex.Effect):
             (cwArc, ccwArc) = (ccwArc, cwArc)
 
         lpower = LASER_POWER % self.options.laser
-        for i in range(1,len(curve)):
-            s, si = curve[i-1], curve[i]
+        isLast = False
+        laserState = False   # initially off
+        # Make certain laser is off and not in "focus" mode:
+        gcode += "\nM42" + (LASER_POWER % LASER_OFF_POWER) + "  ; Make certain the Laser is Off\n"
+        for pc in range(0,self.options.passCount):
+            gcode += "\n; Pass %i:\n" % (pc+1)
+            for i in range(1,len(curve)):
+                s, si = curve[i-1], curve[i]
 
-            if s[1] == 'move':
-                # Traversals (G00) tend to signal either the toolhead coming up, going down, or indexing to a new workplace.  All other cases seem to signal cutting.
-                gcode += "\nG00" + " " + self.make_args(si[0]) + " F%i" % self.options.Mfeed + "\n"
+                if s[1] == 'move':
+                    # Laser off before position move:
+                    if (laserState):
+                        gcode += "M400  ; Wait for movement to end\n"
+                        gcode += "G0  ; Dummy move\n"   # This is needed because M400 waits for the buffers to empty, not movement to actually stop
+                        gcode += "M42" + (LASER_POWER % LASER_IDLE_POWER) + "  ; Laser Idle\n"
+                        laserState = False
+                    # Traversals (G00) tend to signal either the toolhead coming up, going down, or indexing to a new workplace.  All other cases seem to signal cutting.
+                    gcode += "G00" + " " + self.make_args(si[0]) + " F%i" % self.options.Mfeed + "\n"
 
-            elif s[1] == 'end':
-                gcode += "\n"
+                elif s[1] == 'end':
+                    # Laser Off:
+                    if (laserState):
+                        gcode += "M400  ; Wait for movement to end\n"
+                        gcode += "G0  ; Dummy move\n"   # This is needed because M400 waits for the buffers to empty, not movement to actually stop
+                        gcode += "M42" + (LASER_POWER % LASER_IDLE_POWER) + "  ; Laser Idle\n"
+                        laserState = False
+                    gcode += "\n"
 
-            elif s[1] == 'line':
-                gcode += "G01 " +self.make_args(si[0]) + " F%i" % self.options.feed + lpower + "\n"
+                elif s[1] == 'line':
+                    # Laser On:
+                    if (not laserState):
+                        gcode += "M400  ; Wait for movement to end\n"
+                        gcode += "G0    ; Dummy move\n"   # This is needed because M400 waits for the buffers to empty, not movement to actually stop
+                        gcode += "M42" + lpower + "  ; Laser On\n"
+                        laserState = True
+                    # Note: In the BoXZY firmware, a G0 or G1 with "L" will transition out of "focus" mode (M42).
+                    #   Since we are controlling the laser via M42, don't send power ("L") here with G1.  This will keep the
+                    #   laser from turning off at the end of the move:
+                    gcode += "G01 " +self.make_args(si[0]) + " F%i" % self.options.feed + "\n"
 
-            elif s[1] == 'arc':
-                dx = s[2][0]-s[0][0]
-                dy = s[2][1]-s[0][1]
-                if abs((dx**2 + dy**2)*self.options.Xscale) > self.options.min_arc_radius:
-                    r1 = P(s[0])-P(s[2])
-                    r2 = P(si[0])-P(s[2])
-                    if abs(r1.mag() - r2.mag()) < 0.001:
-                        if (s[3] > 0):
-                            gcode += cwArc
+                elif s[1] == 'arc':
+                    # Laser On:
+                    if (not laserState):
+                        gcode += "M400  ; Wait for movement to end\n"
+                        gcode += "G0    ; Dummy move\n"   # This is needed because M400 waits for the buffers to empty, not movement to actually stop
+                        gcode += "M42" + lpower + "  ; Laser On\n"
+                        laserState = True
+                    dx = s[2][0]-s[0][0]
+                    dy = s[2][1]-s[0][1]
+                    if abs((dx**2 + dy**2)*self.options.Xscale) > self.options.min_arc_radius:
+                        r1 = P(s[0])-P(s[2])
+                        r2 = P(si[0])-P(s[2])
+                        if abs(r1.mag() - r2.mag()) < 0.001:
+                            if (s[3] > 0):
+                                gcode += cwArc
+                            else:
+                                gcode += ccwArc
+                            # Note: Even though the BoXZY firmware doesn't transition out of "focus" mode (M42) on G2 and G3,
+                            #   There's still no need to send the power ("L"):
+                            gcode += " " + self.make_args(si[0] + [None, dx, dy, None]) + " F%i" % self.options.feed + "\n"
+
                         else:
-                            gcode += ccwArc
-                        gcode += " " + self.make_args(si[0] + [None, dx, dy, None]) + " F%i" % self.options.feed + lpower + "\n"
+                            r = (r1.mag()+r2.mag())/2
+                            if (s[3] > 0):
+                                gcode += cwArc
+                            else:
+                                gcode += ccwArc
+                            # Note: Even though the BoXZY firmware doesn't transition out of "focus" mode (M42) on G2 and G3,
+                            #   There's still no need to send the power ("L"):
+                            gcode += " " + self.make_args(si[0]) + " R%.4f" % (r*self.options.Xscale) + " F%i" % self.options.feed  + "\n"
 
                     else:
-                        r = (r1.mag()+r2.mag())/2
-                        if (s[3] > 0):
-                            gcode += cwArc
-                        else:
-                            gcode += ccwArc
-                        gcode += " " + self.make_args(si[0]) + " R%.4f" % (r*self.options.Xscale) + " F%i" % self.options.feed  + "\n"
+                        # Note: In the BoXZY firmware, a G0 or G1 with "L" will transition out of "focus" mode (M42).
+                        #   Since we are controlling the laser via M42, don't send power ("L") here with G1.  This will keep the
+                        #   laser from turning off at the end of the move:
+                        gcode += "G01 " +self.make_args(si[0]) + " F%i" % self.options.feed + "\n"
 
-                else:
-                    gcode += "G01 " +self.make_args(si[0]) + " F%i" % self.options.feed + lpower + "\n"
+            if si[1] == 'end':
+                isLast = True
 
-    
-        if si[1] == 'end':
+        # Laser Off (technically, it should have turned off with the 'end' at the end of
+        #    the cut-path above.  But just in case our data didn't include a proper 'end'
+        #    Make certain the laser is off:
+        if (laserState):
+            gcode += "M400  ; Wait for movement to end\n"
+            gcode += "G0  ; Dummy move\n"   # This is needed because M400 waits for the buffers to empty, not movement to actually stop
+            gcode += "M42" + (LASER_POWER % LASER_OFF_POWER) + "  ; Laser Off\n"
+            laserState = False
+
+        if isLast:
             if self.options.homeafter:
                 gcode += "\n\nG0 X0 Y0 F%i ; home X and Y" % self.options.Mfeed
 
@@ -809,13 +877,6 @@ class Gcode_tools(inkex.Effect):
         options = self.options
         selected = self.selected.values()
 
-        root = self.document.getroot()
-        #self.pageHeight = float(root.get("height", None))
-        # IanH new inkscape version screws up when units set to mm
-        # 200mm no good -2 chars from the end -> 200 
-        heightmm = root.get("height", None)
-        heightmm = heightmm[:-2]
-        self.pageHeight = float(heightmm)
         self.flipArcs = (self.options.Xscale*self.options.Yscale < 0)
         self.currentTool = 0
 
@@ -840,21 +901,35 @@ class Gcode_tools(inkex.Effect):
 
         gcode = self.header;
 
+        root = self.document.getroot()
+        if root.get('viewBox'):
+            [viewx, viewy, vieww, viewh] = root.get('viewBox').split(' ')
+            self.unitScale = self.unittouu(root.get('width'))/float(vieww)
+            if self.unittouu(root.get('height'))/float(viewh) < self.unitScale:
+                self.unitScale = self.unittouu(root.get('height'))/float(viewh)
+            self.vbHeight = float(viewh)
+        else:
+            self.unitScale = 1.0
+            self.vbHeight = self.unittouu(root.get('height', None))
+
         if (self.options.unit == "mm"):
-            self.unitScale = 0.282222
+            self.unitScale /= self.unittouu('1mm')
             gcode += "G21 ; All units in mm\n"
         elif (self.options.unit == "in"):
-            self.unitScale = 0.011111
+            self.unitScale /= self.unittouu('1in')
             gcode += "G20 ; All units in in\n"
         else:
             inkex.errormsg(_("You must choose mm or in"))
             return
 
+        self.pageHeight = self.vbHeight;
+
         if not self.options.generate_not_parametric_code:
             gcode += """
 ; Cut Feedrate %i
 ; Move Feedrate %i
-; Laser Intensity %i \n""" % (self.options.feed, self.options.Mfeed, self.options.laser)
+; Laser Intensity %i
+; Pass Count %i \n""" % (self.options.feed, self.options.Mfeed, self.options.laser, self.options.passCount)
 
         if self.options.homebefore:
             gcode += "G28 ; home all\n\n"

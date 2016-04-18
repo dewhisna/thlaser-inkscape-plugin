@@ -46,6 +46,7 @@ This extension is a fork of ShinyLaser 1.30 by Ian Hydes, which is a fork of THL
             <param name="feed" type="int" min="0" max="6000" _gui-text="Cut Feedrate:">600</param>
             <param name="Mfeed" type="int" min="0" max="6000" _gui-text="Traversal Feedrate:">1200</param>
             <param name="laser" type="int" min="0" max="100" _gui-text="Laser Intensity (0-100):">50</param>
+            <param name="passCount" type="int" min="1" max="5" _gui-text="Number of Passes (1-5):">1</param>
             <param name="homebefore" type="boolean" _gui-text="HOMEALL (G28) Before:">false</param>
             <param name="homeafter" type="boolean" _gui-text="Zero X and Y After:">true</param>
 
