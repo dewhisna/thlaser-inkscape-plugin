@@ -108,6 +108,8 @@ VERSION = "1.40"
 STRAIGHT_TOLERANCE = 0.0001
 STRAIGHT_DISTANCE_TOLERANCE = 0.0001
 LASER_POWER = " L%d"
+LASER_IDLE_POWER = 5.0    # This is the Idle "Off" power level for the laser (usually low-level visible mode so laser doesn't fully shutdown)
+LASER_OFF_POWER = 0.0     # This is the true "off" power level for the laser
 TOOL_CHANGE = "T%02d (select tool)\nM6 (tool change)\n\n"
 
 #HEADER_TEXT = "G90 ; absolute programing\n"
@@ -630,22 +632,52 @@ class Gcode_tools(inkex.Effect):
 
         lpower = LASER_POWER % self.options.laser
         isLast = False
+        laserState = False   # initially off
+        # Make certain laser is off and not in "focus" mode:
+        gcode += "\nM42" + (LASER_POWER % LASER_OFF_POWER) + "  ; Make certain the Laser is Off\n"
         for pc in range(0,self.options.passCount):
             gcode += "\n; Pass %i:\n" % (pc+1)
             for i in range(1,len(curve)):
                 s, si = curve[i-1], curve[i]
 
                 if s[1] == 'move':
+                    # Laser off before position move:
+                    if (laserState):
+                        gcode += "M400  ; Wait for movement to end\n"
+                        gcode += "G0  ; Dummy move\n"   # This is needed because M400 waits for the buffers to empty, not movement to actually stop
+                        gcode += "M42" + (LASER_POWER % LASER_IDLE_POWER) + "  ; Laser Idle\n"
+                        laserState = False
                     # Traversals (G00) tend to signal either the toolhead coming up, going down, or indexing to a new workplace.  All other cases seem to signal cutting.
                     gcode += "G00" + " " + self.make_args(si[0]) + " F%i" % self.options.Mfeed + "\n"
 
                 elif s[1] == 'end':
+                    # Laser Off:
+                    if (laserState):
+                        gcode += "M400  ; Wait for movement to end\n"
+                        gcode += "G0  ; Dummy move\n"   # This is needed because M400 waits for the buffers to empty, not movement to actually stop
+                        gcode += "M42" + (LASER_POWER % LASER_IDLE_POWER) + "  ; Laser Idle\n"
+                        laserState = False
                     gcode += "\n"
 
                 elif s[1] == 'line':
-                    gcode += "G01 " +self.make_args(si[0]) + " F%i" % self.options.feed + lpower + "\n"
+                    # Laser On:
+                    if (not laserState):
+                        gcode += "M400  ; Wait for movement to end\n"
+                        gcode += "G0    ; Dummy move\n"   # This is needed because M400 waits for the buffers to empty, not movement to actually stop
+                        gcode += "M42" + lpower + "  ; Laser On\n"
+                        laserState = True
+                    # Note: In the BoXZY firmware, a G0 or G1 with "L" will transition out of "focus" mode (M42).
+                    #   Since we are controlling the laser via M42, don't send power ("L") here with G1.  This will keep the
+                    #   laser from turning off at the end of the move:
+                    gcode += "G01 " +self.make_args(si[0]) + " F%i" % self.options.feed + "\n"
 
                 elif s[1] == 'arc':
+                    # Laser On:
+                    if (not laserState):
+                        gcode += "M400  ; Wait for movement to end\n"
+                        gcode += "G0    ; Dummy move\n"   # This is needed because M400 waits for the buffers to empty, not movement to actually stop
+                        gcode += "M42" + lpower + "  ; Laser On\n"
+                        laserState = True
                     dx = s[2][0]-s[0][0]
                     dy = s[2][1]-s[0][1]
                     if abs((dx**2 + dy**2)*self.options.Xscale) > self.options.min_arc_radius:
@@ -656,7 +688,9 @@ class Gcode_tools(inkex.Effect):
                                 gcode += cwArc
                             else:
                                 gcode += ccwArc
-                            gcode += " " + self.make_args(si[0] + [None, dx, dy, None]) + " F%i" % self.options.feed + lpower + "\n"
+                            # Note: Even though the BoXZY firmware doesn't transition out of "focus" mode (M42) on G2 and G3,
+                            #   There's still no need to send the power ("L"):
+                            gcode += " " + self.make_args(si[0] + [None, dx, dy, None]) + " F%i" % self.options.feed + "\n"
 
                         else:
                             r = (r1.mag()+r2.mag())/2
@@ -664,13 +698,27 @@ class Gcode_tools(inkex.Effect):
                                 gcode += cwArc
                             else:
                                 gcode += ccwArc
+                            # Note: Even though the BoXZY firmware doesn't transition out of "focus" mode (M42) on G2 and G3,
+                            #   There's still no need to send the power ("L"):
                             gcode += " " + self.make_args(si[0]) + " R%.4f" % (r*self.options.Xscale) + " F%i" % self.options.feed  + "\n"
 
                     else:
-                        gcode += "G01 " +self.make_args(si[0]) + " F%i" % self.options.feed + lpower + "\n"
+                        # Note: In the BoXZY firmware, a G0 or G1 with "L" will transition out of "focus" mode (M42).
+                        #   Since we are controlling the laser via M42, don't send power ("L") here with G1.  This will keep the
+                        #   laser from turning off at the end of the move:
+                        gcode += "G01 " +self.make_args(si[0]) + " F%i" % self.options.feed + "\n"
 
             if si[1] == 'end':
                 isLast = True
+
+        # Laser Off (technically, it should have turned off with the 'end' at the end of
+        #    the cut-path above.  But just in case our data didn't include a proper 'end'
+        #    Make certain the laser is off:
+        if (laserState):
+            gcode += "M400  ; Wait for movement to end\n"
+            gcode += "G0  ; Dummy move\n"   # This is needed because M400 waits for the buffers to empty, not movement to actually stop
+            gcode += "M42" + (LASER_POWER % LASER_OFF_POWER) + "  ; Laser Off\n"
+            laserState = False
 
         if isLast:
             if self.options.homeafter:
